@@ -1,0 +1,338 @@
+import streamlit as st
+import pandas as pd
+import json
+import os
+import urllib.parse
+
+# 1. 모바일 화면에 최적화된 centered 레이아웃 설정
+st.set_page_config(
+    page_title="KLEI 맛집 아카이브",
+    page_icon="🌿",
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
+
+# 2. 모바일 친화적 UI 및 KLEI 브랜드 컬러(초록색) CSS 스타일링
+st.markdown("""
+<style>
+    /* 상단 여백 축소 (모바일 화면 활용 극대화) */
+    .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 3rem;
+        max-width: 520px;
+    }
+    /* KLEI 헤더 배너 */
+    .klei-header {
+        background: linear-gradient(135deg, #005b2e 0%, #008040 100%);
+        color: white;
+        padding: 18px 20px;
+        border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(0, 91, 46, 0.2);
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+    .klei-badge {
+        background-color: white;
+        color: #005b2e;
+        font-weight: 900;
+        font-size: 1.25rem;
+        padding: 10px 12px;
+        border-radius: 12px;
+        letter-spacing: -0.5px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        text-align: center;
+        line-height: 1.1;
+    }
+    .klei-badge span {
+        display: block;
+        font-size: 0.55rem;
+        font-weight: 700;
+        color: #555;
+        margin-top: 2px;
+    }
+    .klei-title-wrap h2 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #ffffff;
+        line-height: 1.3;
+    }
+    .klei-title-wrap p {
+        margin: 3px 0 0 0;
+        font-size: 0.78rem;
+        color: #d8f3dc;
+    }
+    /* 모바일 식당 카드 디자인 */
+    .food-card {
+        background-color: #ffffff;
+        border: 1px solid #e6e9ef;
+        border-left: 5px solid #006b36;
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+    .cat-pill {
+        display: inline-block;
+        background-color: #e8f5e9;
+        color: #1b5e20;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 20px;
+        margin-bottom: 6px;
+    }
+    .status-pill {
+        display: inline-block;
+        background-color: #f1f3f5;
+        color: #495057;
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: 20px;
+        margin-left: 5px;
+    }
+    .rest-title {
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #1f2937;
+        margin: 2px 0 8px 0;
+    }
+    .rest-info {
+        font-size: 0.86rem;
+        color: #374151;
+        margin-bottom: 4px;
+        line-height: 1.4;
+    }
+    .rest-note {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 0.8rem;
+        color: #4b5563;
+        margin-top: 8px;
+        margin-bottom: 10px;
+    }
+    .map-btn {
+        display: block;
+        width: 100%;
+        text-align: center;
+        background-color: #006b36;
+        color: #ffffff !important;
+        text-decoration: none !important;
+        font-weight: 700;
+        font-size: 0.88rem;
+        padding: 10px 0;
+        border-radius: 10px;
+        transition: background 0.2s;
+    }
+    .map-btn:hover {
+        background-color: #004d26;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+DATA_FILE = "klei_restaurants.json"
+
+# 카카오톡 대화 기반 초기 데이터 (대영역 > 중영역 > 소영역)
+INITIAL_DATA = [
+    {"name": "갈비명가 연웅", "large_cat": "한식", "mid_cat": "육류/국탕류", "small_cat": "육회비빔밥/갈비탕", "menus": "육회비빔밥(육비), 갈비탕(특), 양념갈비, 비빔냉면, 우거지탕", "location": "청주시 서원구 성화·개신·죽림동 83-2", "note": "연구소 최다 방문 1순위 단골집, 소장님 갈비탕 선호", "status": "실방문/단골"},
+    {"name": "끌임", "large_cat": "한식", "mid_cat": "전골/볶음", "small_cat": "닭볶음탕/콩불", "menus": "닭볶음탕, 콩불(콩나물불고기)", "location": "청주시 흥덕구 사직대로72번길 31", "note": "12시 예약 후 자주 방문하는 충북대 인근 단골집", "status": "실방문/단골"},
+    {"name": "뚝심", "large_cat": "한식", "mid_cat": "백반/찌개/고기", "small_cat": "점심특선/찌개", "menus": "점심식사 및 찌개·고기류", "location": "청주시 흥덕구 봉명로 176", "note": "점심 투표 단골 후보 및 배달 식사로 자주 이용", "status": "실방문/단골"},
+    {"name": "미송", "large_cat": "한식", "mid_cat": "백반/가정식", "small_cat": "한식백반/찌개", "menus": "백반, 찌개류", "location": "청주시 흥덕구 복대동 885-23", "note": "점심 메뉴 투표 시 다수결로 자주 선정되는 곳", "status": "실방문/단골"},
+    {"name": "성화옻닭", "large_cat": "한식", "mid_cat": "보양식/백숙", "small_cat": "옻닭/엄나무닭", "menus": "옻닭(검정색), 엄나무닭(흰색)", "location": "청주시 서원구 성화동 510", "note": "'왜 맨날 성화옻닭만 가요?'라고 할 정도의 대표 보양식집", "status": "실방문/단골"},
+    {"name": "나능이 능이버섯백숙", "large_cat": "한식", "mid_cat": "보양식/백숙", "small_cat": "능이오리백숙", "menus": "능이 오리백숙, 능이 닭백숙", "location": "청주시 서원구 남이면 가마길 16", "note": "예약 후 다 함께 방문하는 오리백숙 보양식집", "status": "실방문/단골"},
+    {"name": "감나무집 (산남동/도안동)", "large_cat": "한식", "mid_cat": "보양식/백숙", "small_cat": "옻닭/엄나무닭", "menus": "옻닭, 엄나무닭", "location": "청주시 서원구 산남동 444", "note": "성화옻닭 대신 변경하여 방문한 보양식집", "status": "실방문/단골"},
+    {"name": "복어찬가 청주본점", "large_cat": "한식", "mid_cat": "해물/탕류", "small_cat": "복어탕/복불고기", "menus": "복맑은탕(지리), 복매운탕, 복튀김", "location": "청주시 서원구 남이면 대림로 377", "note": "축하 식사 자리 및 금요일 점심으로 예약 방문", "status": "실방문/단골"},
+    {"name": "대도영지한우", "large_cat": "한식", "mid_cat": "육류/국탕류", "small_cat": "한우/점심식사", "menus": "한우 구이 및 점심 식사류", "location": "청주시 서원구 사창동 249-20", "note": "10월 말 화요일 점심으로 방문", "status": "실방문/단골"},
+    {"name": "정가네 손칼국수", "large_cat": "한식", "mid_cat": "면류/칼국수", "small_cat": "손칼국수", "menus": "손칼국수, 수제비", "location": "청주시 흥덕구 사운로187번길 64-2", "note": "소장님 모시고 점심 식사로 다녀온 칼국수 맛집", "status": "실방문/단골"},
+    {"name": "미식정 순두부 (현대백화점)", "large_cat": "한식", "mid_cat": "찌개/백반", "small_cat": "순두부찌개", "menus": "각종 순두부찌개 및 솥밥", "location": "청주시 흥덕구 직지대로 308 현대백화점 6층", "note": "성수완당(지하1층)과 함께 배달/방문으로 이용", "status": "실방문/단골"},
+    {"name": "명장갈비", "large_cat": "한식", "mid_cat": "육류/구이", "small_cat": "돼지갈비/갈비탕", "menus": "수제돼지갈비, 갈비탕, 냉면", "location": "청주시 흥덕구 오송읍 오송가락로 259", "note": "오송(오스코) 행사 일정 시 점심 식사 장소", "status": "실방문/단골"},
+    {"name": "일미닭갈비파전", "large_cat": "한식", "mid_cat": "전골/볶음", "small_cat": "닭갈비", "menus": "닭갈비, 해물파전, 막국수", "location": "청주시 서원구 충북대 인근", "note": "점심 투표 때마다 등장하는 단골 닭갈비집", "status": "실방문/단골"},
+    {"name": "한약돼지 숯불구이", "large_cat": "한식", "mid_cat": "육류/구이", "small_cat": "삼겹살/돼지갈비", "menus": "한약삼겹살, 돼지갈비, 점심특선", "location": "청주시 흥덕구 성봉로 287", "note": "점심 투표에서 미송과 결선 투표까지 간 후보", "status": "투표후보/추천"},
+    {"name": "현고 들깨칼국수", "large_cat": "한식", "mid_cat": "면류/칼국수", "small_cat": "들깨칼국수/수제비", "menus": "들깨칼국수, 들깨수제비, 바지락칼국수", "location": "청주시 서원구 개신동 279-5", "note": "개신동 유명 맛집, 점심 투표 후보", "status": "투표후보/추천"},
+    {"name": "우암꿀꿀이순대", "large_cat": "한식", "mid_cat": "국밥/탕류", "small_cat": "순대국밥", "menus": "순대국밥, 모둠순대", "location": "청주시 서원구 성화·개신·죽림동 55", "note": "점심 순대국밥 메뉴로 언급된 곳", "status": "투표후보/추천"},
+    {"name": "새가덕순대", "large_cat": "한식", "mid_cat": "국밥/탕류", "small_cat": "순대국밥/전골", "menus": "순대국밥, 얼큰순대국, 곱창전골", "location": "청주시 상당구 방서동 인근", "note": "왕문혜 박사님 점심 제안 메뉴", "status": "투표후보/추천"},
+    {"name": "장호덕 손만두", "large_cat": "한식", "mid_cat": "분식/만두", "small_cat": "만두/만둣국", "menus": "고기만두, 김치만두, 만두전골", "location": "청주시 흥덕구 가경동 인근", "note": "왕문혜 박사님 점심 제안 메뉴", "status": "투표후보/추천"},
+    {"name": "짱이네 왕 돈까스", "large_cat": "한식", "mid_cat": "분식/경양식", "small_cat": "냉면/돈까스", "menus": "왕돈까스, 물냉면, 비빔냉면", "location": "청주시 서원구 충북대 인근", "note": "여름철 '짱이네(냉면)'으로 투표 후보에 자주 오름", "status": "투표후보/추천"},
+    {"name": "가온석갈비 율량점", "large_cat": "한식", "mid_cat": "육류/구이", "small_cat": "석갈비", "menus": "돼지석갈비, 소석갈비, 냉면", "location": "청주시 청원구 율량로190번길 63", "note": "단체 식사 및 모임 후보지로 추천된 곳", "status": "투표후보/추천"},
+    {"name": "한가네짬뽕", "large_cat": "중식", "mid_cat": "면류/중화요리", "small_cat": "짬뽕/짜장", "menus": "짬뽕, 짜장면, 탕수육", "location": "청주시 서원구 1순환로672번길 53", "note": "연구소 중식 투표 1순위 단골집", "status": "실방문/단골"},
+    {"name": "경화대반점", "large_cat": "중식", "mid_cat": "정통중식/코스", "small_cat": "중화요리/룸식당", "menus": "간짜장, 짬뽕, 탕수육, 코스요리", "location": "청주시 서원구 산남동 327-5", "note": "2층 좌석이 넉넉하여 단체 점심 식사로 방문", "status": "실방문/단골"},
+    {"name": "보배반점 충북대점", "large_cat": "중식", "mid_cat": "면류/중화요리", "small_cat": "짬뽕/짜장", "menus": "보배짬뽕, 소고기짬뽕, 짜장면, 탕수육", "location": "청주시 서원구 사직대로 112 2층", "note": "7월 말 점심 투표에서 다수결로 선정되어 방문", "status": "실방문/단골"},
+    {"name": "비범 청주점", "large_cat": "중식", "mid_cat": "중식다이닝", "small_cat": "모던중식/단체모임", "menus": "비범 짜장, 트러플 짬뽕, 동파육 등", "location": "청주시 청원구 상당로 314 문화제조창C 1층", "note": "홈커밍데이(동문회) 12인 단체 식사로 예약 방문", "status": "실방문/단골"},
+    {"name": "림춘 청주원더아리아점", "large_cat": "중식", "mid_cat": "중식다이닝", "small_cat": "모던중식/세트", "menus": "베이징덕, 딤섬, 중화요리 단품 및 세트", "location": "청주시 청원구 상당로 314 문화제조창", "note": "홈커밍데이 식사 2안으로 검토된 곳", "status": "투표후보/추천"},
+    {"name": "퀴즈노스 충북대병원점", "large_cat": "양식", "mid_cat": "샌드위치/브런치", "small_cat": "오븐샌드위치", "menus": "블랙 앵거스&트러플 스테이크 샌드위치 등", "location": "청주시 서원구 개신동 62 충북대병원 H2동 1층", "note": "스타벅스 건물, 연구소 저녁/야근 시 대인기 메뉴", "status": "실방문/단골"},
+    {"name": "브루클린바이브 청주지웰시티점", "large_cat": "양식", "mid_cat": "이탈리안/아메리칸", "small_cat": "파스타/스테이크", "menus": "파스타, 리조또, 스테이크", "location": "청주시 흥덕구 대농로 43 상가동 1층 103호", "note": "1월 5일 점심으로 공유 및 방문", "status": "실방문/단골"},
+    {"name": "바니시(varnish)버거", "large_cat": "양식", "mid_cat": "버거/패스트푸드", "small_cat": "수제버거", "menus": "바니시버거, 치즈버거, 감자튀김", "location": "청주시 흥덕구 복대2동 905-15", "note": "점심 투표 때 버거 메뉴 후보로 등장", "status": "투표후보/추천"},
+    {"name": "스탠다드 (Standard)", "large_cat": "양식", "mid_cat": "경양식/퓨전양식", "small_cat": "돈까스/파스타", "menus": "수제돈까스, 파스타, 필라프", "location": "청주시 흥덕구 봉명동 1008 1층", "note": "양희수 선생님이 점심 투표에서 픽한 곳", "status": "투표후보/추천"},
+    {"name": "푸에고 네그로", "large_cat": "양식", "mid_cat": "스페인/유러피안", "small_cat": "스테이크/빠에야", "menus": "이베리코 플루마 스테이크, 빠에야, 파스타", "location": "청주시 상당구 상당로115번길 50 1층", "note": "왕문혜 박사님 추천, 홈커밍데이 식사 1안 후보", "status": "투표후보/추천"},
+    {"name": "구스토 청주성안길점", "large_cat": "양식", "mid_cat": "이탈리안", "small_cat": "화덕피자/파스타", "menus": "뇨끼, 파스타, 화덕피자, 스테이크", "location": "청주시 상당구 상당로143번길 49", "note": "단체 모임 식사 후보지로 검토된 곳", "status": "투표후보/추천"},
+    {"name": "우나기칸 청주점", "large_cat": "일식/아시안/기타", "mid_cat": "일식", "small_cat": "장어덮밥(히츠마부시)", "menus": "히츠마부시(장어덮밥), 카이센동", "location": "청주시 서원구 산남로 68 센타프라자 2층", "note": "김수진 박사님 방문 시 소장님과 다 함께 점심 식사", "status": "실방문/단골"},
+    {"name": "알로이팟", "large_cat": "일식/아시안/기타", "mid_cat": "태국/동남아", "small_cat": "쌀국수/팟타이", "menus": "소고기쌀국수, 팟타이, 뿌팟퐁커리", "location": "청주시 흥덕구 강서로 101", "note": "장우천 박사님이 점심 메뉴로 픽한 태국 음식점", "status": "투표후보/추천"},
+    {"name": "웍스터 (WOKSTER)", "large_cat": "일식/아시안/기타", "mid_cat": "아시안퓨전", "small_cat": "볶음면/덮밥", "menus": "아시안 웍 요리, 덮밥, 면 요리", "location": "청주시 상당구 상당로115번길 50", "note": "9월, 11월 점심 투표 후보로 자주 등장", "status": "투표후보/추천"},
+    {"name": "최부짱", "large_cat": "일식/아시안/기타", "mid_cat": "일식", "small_cat": "덮밥/라멘/돈까스", "menus": "부타동, 마제소바, 돈까스", "location": "청주시 서원구 1순환로648번길 22", "note": "하은호 박사님 점심 투표 제안 메뉴", "status": "투표후보/추천"},
+    {"name": "멘야마쯔리 충북대점", "large_cat": "일식/아시안/기타", "mid_cat": "일식", "small_cat": "일본라멘", "menus": "돈코츠라멘, 카라구치라멘, 교자", "location": "청주시 서원구 내수동로102번길 54", "note": "하은호 박사님 점심 투표 제안 메뉴", "status": "투표후보/추천"},
+    {"name": "고메스퀘어 오송점", "large_cat": "일식/아시안/기타", "mid_cat": "뷔페", "small_cat": "초밥/해산물뷔페", "menus": "초밥, 롤, 그릴, 한식/양식/중식 뷔페", "location": "청주시 흥덕구 오송읍 연제리 665", "note": "총액인건비 담당자 협의회 당시 32인 룸 예약 방문", "status": "실방문/단골"},
+    {"name": "빵굽는마을", "large_cat": "카페/베이커리", "mid_cat": "베이커리", "small_cat": "옛날빵/도넛", "menus": "찹쌀도넛, 옥수수 못난이빵, 버터크림빵, 초코롤", "location": "청주시 흥덕구 옥산면 옥산시내1길 37", "note": "연구소 오후 간식으로 단체 주문", "status": "실방문/단골"},
+    {"name": "너바나커피로스터스", "large_cat": "카페/베이커리", "mid_cat": "카페/디저트", "small_cat": "로스터리카페", "menus": "아메리카노, 드립커피, 디저트(달달구리)", "location": "청주시 흥덕구 복대동 885-14", "note": "소장님 달달구리 간식 및 커피 테이크아웃", "status": "실방문/단골"},
+    {"name": "후마니타스", "large_cat": "카페/베이커리", "mid_cat": "대형카페", "small_cat": "한옥/북카페", "menus": "청포도케일 주스, 오미자 에이드, 디카페인 아아", "location": "청주시 흥덕구 비하동 571", "note": "홈커밍데이 13인 단체 예약 방문", "status": "실방문/단골"}
+]
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        save_data(INITIAL_DATA)
+        return INITIAL_DATA
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def make_google_maps_url(name, location):
+    query = urllib.parse.quote(f"{name} {location}")
+    return f"https://www.google.com/maps/search/?api=1&query={query}"
+
+restaurants = load_data()
+df = pd.DataFrame(restaurants)
+if not df.empty:
+    df["google_map_url"] = df.apply(lambda r: make_google_maps_url(r["name"], r["location"]), axis=1)
+
+# ================= 상단: 한국지방교육연구소(KLEI) 로고 헤더 =================
+if os.path.exists("klei_logo.png"):
+    st.image("klei_logo.png", use_container_width=True)
+
+st.markdown("""
+<div class="klei-header">
+    <div class="klei-badge">KLEI<span>CBNU</span></div>
+    <div class="klei-title-wrap">
+        <h2>한국지방교육연구소</h2>
+        <p>점심·회식 메뉴 아카이브 & 의사결정 시스템</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ================= 메인 탭 구성 (모바일 엄지손가락 터치 최적화) =================
+tab_list, tab_random, tab_add = st.tabs(["📋 메뉴판", "🎲 오늘뭐먹지", "➕ 식당추가/관리"])
+
+# ----------------- 탭 1: 모바일 메뉴판 (대>중>소 필터 + 카드 뷰) -----------------
+with tab_list:
+    # 1단계: 대영역 선택
+    large_list = ["전체"] + sorted(df["large_cat"].unique().tolist())
+    sel_large = st.selectbox("1단계: 대영역 선택", large_list)
+    
+    f_df = df if sel_large == "전체" else df[df["large_cat"] == sel_large]
+
+    # 2단계 & 3단계 나란히 배치
+    c1, c2 = st.columns(2)
+    with c1:
+        mid_list = ["전체"] + sorted(f_df["mid_cat"].unique().tolist())
+        sel_mid = st.selectbox("2단계: 중영역", mid_list)
+    if sel_mid != "전체":
+        f_df = f_df[f_df["mid_cat"] == sel_mid]
+
+    with c2:
+        small_list = ["전체"] + sorted(f_df["small_cat"].unique().tolist())
+        sel_small = st.selectbox("3단계: 소영역", small_list)
+    if sel_small != "전체":
+        f_df = f_df[f_df["small_cat"] == sel_small]
+
+    search_kw = st.text_input("🔍 빠른 검색 (메뉴·식당·메모)", placeholder="예: 갈비탕, 옻닭, 예약, 소장님")
+    if search_kw.strip():
+        kw = search_kw.strip()
+        f_df = f_df[
+            f_df["name"].str.contains(kw, case=False) |
+            f_df["menus"].str.contains(kw, case=False) |
+            f_df["note"].str.contains(kw, case=False) |
+            f_df["small_cat"].str.contains(kw, case=False)
+        ]
+
+    st.caption(f"총 **{len(f_df)}곳**의 연구소 식당이 조회되었습니다.")
+
+    # 모바일 맞춤형 식당 카드 리스트 출력
+    for _, row in f_df.iterrows():
+        st.markdown(f"""
+        <div class="food-card">
+            <div>
+                <span class="cat-pill">{row['large_cat']} &gt; {row['mid_cat']} &gt; {row['small_cat']}</span>
+                <span class="status-pill">{row['status']}</span>
+            </div>
+            <div class="rest-title">🍴 {row['name']}</div>
+            <div class="rest-info"><b>주요메뉴:</b> {row['menus']}</div>
+            <div class="rest-info"><b>위치:</b> {row['location']}</div>
+            <div class="rest-note">💡 {row['note']}</div>
+            <a class="map-btn" href="{row['google_map_url']}" target="_blank">📍 구글 지도 앱으로 위치 열기</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ----------------- 탭 2: 오늘 뭐 먹지? (모바일 룰렛) -----------------
+with tab_random:
+    st.subheader("🎲 점심 메뉴 룰렛")
+    st.write("고민될 때 버튼을 누르면 연구소 식당 중 한 곳을 랜덤으로 뽑아줍니다.")
+    
+    r_cat = st.selectbox("어떤 종류가 끌리시나요?", ["전체"] + sorted(df["large_cat"].unique().tolist()))
+    only_visited = st.checkbox("실제 방문했던 단골집에서만 뽑기", value=False)
+    
+    if st.button("🎰 오늘의 점심 메뉴 뽑기!", use_container_width=True, type="primary"):
+        pool = df if r_cat == "전체" else df[df["large_cat"] == r_cat]
+        if only_visited:
+            pool = pool[pool["status"] == "실방문/단골"]
+            
+        if not pool.empty:
+            pick = pool.sample(1).iloc[0]
+            st.balloons()
+            st.markdown(f"""
+            <div class="food-card" style="border-left: 6px solid #ff9800; background-color: #fffdf9;">
+                <span class="cat-pill">{pick['large_cat']} &gt; {pick['mid_cat']} &gt; {pick['small_cat']}</span>
+                <div class="rest-title" style="font-size:1.35rem; color:#d97706;">🎉 {pick['name']}</div>
+                <div class="rest-info"><b>주요메뉴:</b> {pick['menus']}</div>
+                <div class="rest-info"><b>위치:</b> {pick['location']}</div>
+                <div class="rest-note">💡 {pick['note']}</div>
+                <a class="map-btn" href="{pick['google_map_url']}" target="_blank">📍 구글 지도 앱으로 위치 열기</a>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.warning("조건에 맞는 식당이 없습니다.")
+
+# ----------------- 탭 3: 새 식당 추가 및 삭제 -----------------
+with tab_add:
+    st.subheader("➕ 새로 가본 식당 등록")
+    with st.form("mobile_add_form", clear_on_submit=True):
+        n_name = st.text_input("식당 이름 *", placeholder="예: 새가덕순대")
+        n_large = st.selectbox("대영역 *", ["한식", "중식", "양식", "일식/아시안/기타", "카페/베이커리"])
+        n_mid = st.text_input("중영역 *", placeholder="예: 국밥/탕류, 면류, 육류/구이")
+        n_small = st.text_input("소영역 *", placeholder="예: 순대국밥, 짬뽕, 칼국수")
+        n_menus = st.text_input("주요 메뉴", placeholder="예: 순대국밥, 수육")
+        n_loc = st.text_input("위치/동 이름", placeholder="예: 청주시 서원구 개신동")
+        n_status = st.selectbox("구분", ["실방문/단골", "투표후보/추천", "신규발굴"])
+        n_note = st.text_input("연구소 한줄 메모", placeholder="예: 주차 편함, 국물 깔끔함")
+
+        if st.form_submit_button("📌 게시판에 식당 추가하기", use_container_width=True, type="primary"):
+            if not n_name.strip() or not n_mid.strip() or not n_small.strip():
+                st.error("식당 이름, 중영역, 소영역은 꼭 입력해 주세요!")
+            else:
+                restaurants.append({
+                    "name": n_name.strip(),
+                    "large_cat": n_large,
+                    "mid_cat": n_mid.strip(),
+                    "small_cat": n_small.strip(),
+                    "menus": n_menus.strip() if n_menus.strip() else "-",
+                    "location": n_loc.strip() if n_loc.strip() else "청주",
+                    "note": n_note.strip() if n_note.strip() else "-",
+                    "status": n_status
+                })
+                save_data(restaurants)
+                st.success(f"'{n_name}' 등록 완료! 메뉴판 탭에서 바로 확인하실 수 있습니다.")
+                st.rerun()
+
+    st.divider()
+    with st.expander("🗑️ 등록된 식당 삭제하기"):
+        del_name = st.selectbox("삭제할 식당 선택", ["선택 안 함"] + df["name"].tolist())
+        if del_name != "선택 안 함":
+            if st.button(f"'{del_name}' 삭제", use_container_width=True):
+                restaurants = [r for r in restaurants if r["name"] != del_name]
+                save_data(restaurants)
+                st.warning(f"'{del_name}' 삭제 완료!")
+                st.rerun()
